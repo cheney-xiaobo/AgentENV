@@ -397,7 +397,9 @@ impl SnapshotRepository for OssSnapshotRepository {
     }
 
     async fn delete(&self, id_or_alias: &str) -> RepositoryResult<()> {
-        // Resolve the actual id + metadata.
+        // Resolve the actual id + metadata. The full record is retained so we
+        // can compute the candidate managed-layer set for reaping after the
+        // catalog entry is gone.
         let record = match self.get(id_or_alias).await? {
             Some(t) => t,
             None => return Ok(()), // Idempotent.
@@ -434,6 +436,13 @@ impl SnapshotRepository for OssSnapshotRepository {
         if let Err(error) = self.client.delete_prefix(&layout.artifact_prefix()).await {
             warn!(snapshot_id = %id, error = %error, "failed to delete oss snapshot artifacts");
         }
+
+        // 5. Reap managed layers that this snapshot pinned and that no
+        // remaining snapshot references. Done after the record/artifacts are
+        // gone so a concurrent `list` does not include this snapshot's
+        // references in the survivor set. Best-effort: failures emit warnings
+        // and surface no error to the caller.
+        let _ = self.reap_orphaned_managed_layers(&record).await;
 
         debug!(snapshot_id = %id, "deleted snapshot from oss");
         Ok(())
@@ -885,6 +894,123 @@ impl OssSnapshotRepository {
                 );
             }
         }
+    }
+
+    /// Collects managed-layer digests referenced by a single snapshot record.
+    ///
+    /// Only `OverlaybdLayerRef::Managed` entries point at objects under
+    /// `managed-layers/`; `External` layers live in their source registry and
+    /// must not be touched by OSS GC.
+    fn collect_managed_layer_digests(record: &SnapshotRecord) -> HashSet<String> {
+        let mut digests = HashSet::new();
+        let Some(committed) = record.committed.as_ref() else {
+            return digests;
+        };
+        for layer_ref in &committed.rootfs_layers {
+            if let OverlaybdLayerRef::Managed(layer) = layer_ref {
+                digests.insert(layer.digest.clone());
+            }
+        }
+        for layer in &committed.memory_layers {
+            digests.insert(layer.digest.clone());
+        }
+        for drive in &committed.attached_drives {
+            let CommittedAttachedDrive::Overlaybd { layers, .. } = drive;
+            for layer_ref in layers {
+                if let OverlaybdLayerRef::Managed(layer) = layer_ref {
+                    digests.insert(layer.digest.clone());
+                }
+            }
+        }
+        digests
+    }
+
+    /// Drops managed layers that this snapshot owned and that no remaining
+    /// snapshot references. Best-effort: failures only emit warnings so that a
+    /// missing-or-stale layer never blocks record deletion.
+    ///
+    /// Implementation uses a candidate-minus-survivors set rather than a full
+    /// `managed-layers/` prefix scan: it only deletes layers this snapshot
+    /// actually pinned, which keeps concurrent publishes safe (their
+    /// `upload_if_missing` head check will have already observed the object).
+    async fn reap_orphaned_managed_layers(
+        &self,
+        deleted_record: &SnapshotRecord,
+    ) -> RepositoryResult<()> {
+        let candidates = Self::collect_managed_layer_digests(deleted_record);
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        // Survivors: digests still referenced by any remaining record. A failed
+        // list is treated as "no survivors" so a transient OSS error does not
+        // leak layers forever; concurrent snapshots may temporarily re-upload
+        // them because `upload_if_missing` is head-guarded.
+        let mut survivors = HashSet::new();
+        if let Ok(records) = self.list(SnapshotListFilter::matches_all()).await {
+            for record in records {
+                for digest in Self::collect_managed_layer_digests(&record) {
+                    survivors.insert(digest);
+                }
+            }
+        } else {
+            warn!(
+                snapshot_id = %deleted_record.id,
+                "failed to enumerate remaining snapshots during managed-layer reap; proceeding with deletion since managed layers are content-addressed and re-uploadable"
+            );
+        }
+
+        let orphans: Vec<&String> = candidates.difference(&survivors).collect();
+        if orphans.is_empty() {
+            debug!(
+                snapshot_id = %deleted_record.id,
+                "no orphaned managed layers to reap"
+            );
+            return Ok(());
+        }
+
+        let mut failed: usize = 0;
+        let mut reaped: usize = 0;
+        let mut reap_results = stream::iter(orphans.into_iter().cloned())
+            .map(|digest| async move {
+                let key = OssSnapshotArtifactLayout::managed_layer_key(&digest);
+                match self.client.delete(&key).await {
+                    Ok(()) => (digest, true),
+                    Err(error) => {
+                        warn!(
+                            snapshot_id = %deleted_record.id,
+                            digest = %digest,
+                            error = %error,
+                            "failed to delete orphaned managed layer from oss; continuing"
+                        );
+                        (digest, false)
+                    }
+                }
+            })
+            .buffer_unordered(16);
+        while let Some((_, ok)) = reap_results.next().await {
+            if ok {
+                reaped += 1;
+            } else {
+                failed += 1;
+            }
+        }
+
+        if failed == 0 {
+            info!(
+                snapshot_id = %deleted_record.id,
+                reaped,
+                "reaped orphaned managed layers after snapshot deletion"
+            );
+        } else {
+            warn!(
+                snapshot_id = %deleted_record.id,
+                reaped,
+                failed,
+                "managed-layer reap completed with errors; failing layers will be retried on next delete"
+            );
+        }
+        Ok(())
     }
 
     /// Export attached-drive disk images and derive committed metadata.
@@ -1391,5 +1517,104 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    /// Build a snapshot record that exercises every managed-layer-bearing
+    /// field: rootfs layers, memory layers, and an attached Overlaybd drive
+    /// whose lowers are a mix of managed and external layers.
+    fn sample_record_with_layers() -> SnapshotRecord {
+        let managed = |digest: &str, size: u64| ManagedLayer {
+            digest: digest.to_string(),
+            size,
+            uuid: None,
+        };
+        let external = |digest: &str, size: u64| OverlaybdLayerRef::External(ExternalLayer {
+            digest: digest.to_string(),
+            repo_blob_url: "https://registry.example/v2/ns/image/blobs".to_string(),
+            size,
+        });
+        let managed_ref = |digest: &str, size: u64| {
+            OverlaybdLayerRef::Managed(managed(digest, size))
+        };
+
+        let committed = CommittedSnapshot {
+            rootfs_layers: vec![
+                managed_ref("sha256:rootfs-a", 4096),
+                external("sha256:rootfs-ext", 1024),
+                managed_ref("sha256:rootfs-b", 8192),
+            ],
+            memory_layers: vec![managed("sha256:mem-a", 512), managed("sha256:mem-b", 1024)],
+            attached_drives: vec![CommittedAttachedDrive::Overlaybd {
+                drive_id: "drive-0".to_string(),
+                layers: vec![
+                    managed_ref("sha256:drive-a", 2048),
+                    external("sha256:drive-ext", 4096),
+                ],
+                read_only: true,
+                virtual_size: 1 << 20,
+                mount_path: PathBuf::new(),
+                sub_path: None,
+            }],
+            ..CommittedSnapshot::mock()
+        };
+        SnapshotRecord::mock_ready(committed)
+    }
+
+    #[test]
+    fn collect_managed_layer_digests_dedupes_and_skips_external_layers() {
+        let record = sample_record_with_layers();
+        let digests = OssSnapshotRepository::collect_managed_layer_digests(&record);
+
+        assert_eq!(digests.len(), 5, "expected 5 distinct managed digests");
+        assert!(digests.contains("sha256:rootfs-a"));
+        assert!(digests.contains("sha256:rootfs-b"));
+        assert!(digests.contains("sha256:mem-a"));
+        assert!(digests.contains("sha256:mem-b"));
+        assert!(digests.contains("sha256:drive-a"));
+        assert!(
+            !digests.contains("sha256:rootfs-ext"),
+            "external layers must not be reaped"
+        );
+        assert!(
+            !digests.contains("sha256:drive-ext"),
+            "external drive layers must not be reaped"
+        );
+    }
+
+    #[test]
+    fn collect_managed_layer_digests_empty_when_uncommitted() {
+        let record = SnapshotRecord::template_waiting(
+            SnapshotId::generate(),
+            None,
+            SandboxResources::default(),
+        );
+        assert!(OssSnapshotRepository::collect_managed_layer_digests(&record).is_empty());
+    }
+
+    #[test]
+    fn collect_managed_layer_digests_dedupes_across_fields() {
+        // Same digest referenced from rootfs and a drive must count once.
+        let shared = ManagedLayer {
+            digest: "sha256:shared".to_string(),
+            size: 256,
+            uuid: None,
+        };
+        let committed = CommittedSnapshot {
+            rootfs_layers: vec![OverlaybdLayerRef::Managed(shared.clone())],
+            memory_layers: vec![shared.clone()],
+            attached_drives: vec![CommittedAttachedDrive::Overlaybd {
+                drive_id: "drive-0".to_string(),
+                layers: vec![OverlaybdLayerRef::Managed(shared)],
+                read_only: true,
+                virtual_size: 1 << 20,
+                mount_path: PathBuf::new(),
+                sub_path: None,
+            }],
+            ..CommittedSnapshot::mock()
+        };
+        let record = SnapshotRecord::mock_ready(committed);
+        let digests = OssSnapshotRepository::collect_managed_layer_digests(&record);
+        assert_eq!(digests.len(), 1, "shared digest must be deduped");
+        assert!(digests.contains("sha256:shared"));
     }
 }

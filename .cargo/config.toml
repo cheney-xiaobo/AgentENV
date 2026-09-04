@@ -1,2 +1,8 @@
 [alias]
 adev = "run --package adev --"
+
+# Use the system git CLI for fetching git dependencies. The default libgit2
+# backend uses schannel on Windows which fails with CRYPT_E_NO_REVOCATION_CHECK
+# in this environment; the CLI uses git's own HTTP transport which works.
+[net]
+git-fetch-with-cli = true

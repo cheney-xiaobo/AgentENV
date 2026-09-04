@@ -39,6 +39,19 @@ pub trait PausedSandboxState: Any + fmt::Debug + Send + Sync + 'static {
     fn control_plane_port(&self) -> Option<u16> {
         None
     }
+
+    /// Build a [`CapturedSandboxSnapshot`] directly from this persisted paused
+    /// state, without spawning or resuming a live sandbox backend.
+    ///
+    /// Backends that already wrote snapshot artifacts during `pause` can
+    /// implement this to publish those artifacts as a snapshot, which is
+    /// required for migrating a paused sandbox. Backends that cannot produce
+    /// a captured snapshot without a live process return `Err`.
+    fn create_captured_snapshot(&self) -> std::result::Result<CapturedSandboxSnapshot, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "backend does not support capturing a snapshot from a persisted paused state"
+        ))
+    }
 }
 
 impl dyn PausedSandboxState {
@@ -223,6 +236,24 @@ pub trait SandboxBackend: Send + 'static {
     /// runtime before failing, so callers must not keep treating the sandbox
     /// as safely runnable.
     async fn snapshot(&mut self) -> SandboxCaptureResult<CapturedSandboxSnapshot>;
+
+    /// Capture a persistent snapshot from a sandbox without changing its run
+    /// state at the end.
+    ///
+    /// For a sandbox that is already `Paused`, this captures the snapshot and
+    /// leaves the sandbox `Paused` (no implicit resume). For a `Running`
+    /// sandbox the behavior is identical to [`snapshot`](Self::snapshot):
+    /// the implementation may briefly pause to capture and then resume.
+    ///
+    /// The orchestrator uses this when migrating a paused sandbox so the
+    /// source's paused state is preserved across the snapshot capture.
+    ///
+    /// [`SandboxCaptureError::Terminal`] indicates snapshot capture mutated
+    /// the live runtime before failing, so callers must not keep treating
+    /// the sandbox as safely runnable.
+    async fn snapshot_no_resume(&mut self) -> SandboxCaptureResult<CapturedSandboxSnapshot> {
+        self.snapshot().await
+    }
 
     /// Fork this running sandbox into ready child backends.
     ///

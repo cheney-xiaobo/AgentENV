@@ -1170,6 +1170,8 @@ fn create_request(
         custom_extension_params: None,
         auto_resume: false,
         secure: false,
+        sandbox_id: None,
+        start_paused: false,
     }
 }
 
@@ -1232,6 +1234,8 @@ async fn create_sandbox_from_image_uses_fresh_launch_metadata() -> Result<()> {
             custom_extension_params: None,
             auto_resume: false,
             secure: false,
+            sandbox_id: None,
+            start_paused: false,
         })
         .await?;
 
