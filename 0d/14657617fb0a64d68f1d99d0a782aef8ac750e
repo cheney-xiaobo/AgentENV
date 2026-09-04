@@ -1,0 +1,163 @@
+src/orchestrator/types.rs
+  s_151bc885b62ca8::t_5dda17c4d69eec 44-48
+  s_151bc885b62ca8::t_79cc3fabc1dacf 39-43
+src/api/openapi.yml
+  s_151bc885b62ca8::t_3eed8c0777a281 544-552
+  s_151bc885b62ca8::t_0b8966e4442bb6 553-560
+src/api/generated/src/models.rs
+  s_151bc885b62ca8::t_7aa4af95e97e3d 2952
+  s_151bc885b62ca8::t_844c822cbafef5 3067-3070
+  s_151bc885b62ca8::t_d7a4e5384ad103 2953
+  s_151bc885b62ca8::t_c4c3fb35a328b8 3143
+  s_151bc885b62ca8::t_10cfd1269ea99b 3028
+  s_151bc885b62ca8::t_7abf7fc3cbc411 3156
+  s_151bc885b62ca8::t_5c4d489204007f 3040
+  s_151bc885b62ca8::t_4fa1a21237a526 3092-3095
+  s_151bc885b62ca8::t_bd95931641bf50 2882-2886
+  s_151bc885b62ca8::t_2891bf0179b647 2887-2891
+.vscode/settings.json
+  s_151bc885b62ca8::t_c658157e1c9f67 5
+  s_65105c873dada3::t_e379dfd8a3a6f8 6
+.cargo/config.toml
+  s_151bc885b62ca8::t_4c78ae40bfaa6c 3-8
+src/snapshot/repository/backends/oss/repository.rs
+  s_151bc885b62ca8::t_9599d45420c7e0 445,918-921
+  s_151bc885b62ca8::t_c6381d33c2e402 446,899-917,922-971,988-989,998,1000-1001,1003-1007,1010-1015
+  s_151bc885b62ca8::t_71baafa12c5d4b 972-987,990-997,999,1002,1008-1009
+  s_151bc885b62ca8::t_12722a45094f48 1521-1619
+  s_151bc885b62ca8::t_24b7b07710e8fb 400-402,440-444
+src/orchestrator/launch_plan.rs
+  s_151bc885b62ca8::t_ff4aa489f2abc2 17-20
+  s_151bc885b62ca8::t_0111d16824d5e4 52,60,70,80
+services/gateway/internal/migrate_test.go
+  s_151bc885b62ca8::t_0b5bf35a05c95c 182-185,207-210,228-231
+  s_151bc885b62ca8::t_79e68b97094997 40-44
+  s_65105c873dada3::t_7a426bbe0d5e73 403-407
+  s_151bc885b62ca8::t_f8006f50bfe624 408-425,446-448
+  h_495ba9d9ec15fe 426-435,438-439
+  s_151bc885b62ca8::t_254ce76b41f270 23-28,30-39,45,65-70,90,96-106,109
+  s_151bc885b62ca8::t_6553d84ac152f1 220,317
+  s_151bc885b62ca8::t_3404926a1a4057 120-127
+  s_65105c873dada3::t_048b5caa655f80 357-362
+  s_151bc885b62ca8::t_faf8b2853cee25 18
+  s_151bc885b62ca8::t_359de4da1e7291 1-4,6-17,19-22,29,46,55-64,71-86,88-89,91-95,107-108,110-113,118-119,130-181,186-206,211-217,222,232,235-236,238,310-313,315-316,318-349,354-356,363-402,506-562
+  s_65105c873dada3::t_529f74aab40ff6 233,237,449-505
+  s_151bc885b62ca8::t_a6cf6279e8df51 5
+  s_151bc885b62ca8::t_d299c6cd94e7f9 239-308
+  s_65105c873dada3::t_cd9e47fffa92d4 350-353
+  s_65105c873dada3::t_67dd6e84ccdffe 87
+  s_65105c873dada3::t_1c34e552bac144 436-437,440-445
+  s_65105c873dada3::t_122617ff283dce 309
+  s_65105c873dada3::t_2d0bc074e328e4 115
+  s_151bc885b62ca8::t_a04df6e65fd24d 47-49,52-54
+  s_151bc885b62ca8::t_d7fda1c0abcce9 128-129
+  s_151bc885b62ca8::t_98dc347d61c15e 218-219
+  s_151bc885b62ca8::t_76835ad16b4168 221
+  s_151bc885b62ca8::t_0da92180e1233b 223-227
+  s_151bc885b62ca8::t_ecf08e023593c1 314
+src/orchestrator/service.rs
+  s_151bc885b62ca8::t_4f352ecb1d4692 1534-1537,1540-1541,1543,1548,1555-1576,1624-1628,1634-1637,1648-1678
+  s_151bc885b62ca8::t_431fe4d22dff6a 2263-2269,2271-2304,2307,2309-2347,2350-2363
+  s_151bc885b62ca8::t_c078940607a0b9 369-371
+  s_151bc885b62ca8::t_03f9b2f3698b17 1496-1501,1510,1525,1533,1550,1579,1584,1597,1601,1613,1616,1620-1623,1629-1633,1638-1647
+  s_151bc885b62ca8::t_895a442d7a2e2e 368
+  s_151bc885b62ca8::t_6f53f5a3bbe41b 335,1679-1680
+  s_151bc885b62ca8::t_a4b08abf7515de 1502-1505,1514,1527-1532
+  s_151bc885b62ca8::t_f7dab321149ff5 2145-2151
+  s_151bc885b62ca8::t_a31206db1b3618 2258-2262,2270,2305-2306,2308,2348-2349,2364-2366,2376-2380,2388
+  s_151bc885b62ca8::t_5a9fb349744c0e 2403-2419,2421-2426
+  s_151bc885b62ca8::t_49e7f96aadd8f4 497
+  s_151bc885b62ca8::t_e280d433f2f5e1 436
+  s_151bc885b62ca8::t_5b6092a36fc4ef 18-21
+src/orchestrator/tests.rs
+  s_151bc885b62ca8::t_57884db4e34b47 1237
+  s_151bc885b62ca8::t_d1796632ea118b 1174
+  s_151bc885b62ca8::t_a260d32e00de0a 1173
+  s_151bc885b62ca8::t_81b03736295299 1238
+src/sandbox/firecracker/sandbox.rs
+  s_151bc885b62ca8::t_4f352ecb1d4692 246-277
+  s_151bc885b62ca8::t_53d273ad44dcc0 372-412
+services/gateway/internal/migrate.go
+  s_151bc885b62ca8::t_348cf239ce4033 231-233,235-238
+  s_151bc885b62ca8::t_79003d7feedcb8 1-53,69,72-147,182-186,188-199,240-241,345-346,360-361,363-407,416-420,423-473
+  s_151bc885b62ca8::t_94df19a4fa7db5 226-230,239,252,268,341,344
+  s_151bc885b62ca8::t_88fe7c60a03bba 421-422
+  s_65105c873dada3::t_aa20e1bf896f76 243-251
+  s_65105c873dada3::t_d2ca23fd915f18 253-263,265-267,269-340,342-343
+  s_151bc885b62ca8::t_7411cd5738e164 187
+  s_65105c873dada3::t_8c56170cf59805 347-359,362,415
+  s_151bc885b62ca8::t_363e501c228449 150-176
+  s_65105c873dada3::t_cb82b69fadb0ab 200-225
+  s_151bc885b62ca8::t_2654f6833c019a 178-181
+  s_151bc885b62ca8::t_9f482b07abf651 54-56,66-68
+  s_151bc885b62ca8::t_ec27e267591f47 70-71
+  s_151bc885b62ca8::t_5fb003e8cdd31c 148-149
+  s_151bc885b62ca8::t_82f989c5b1420f 177
+  s_151bc885b62ca8::t_5059b49d9b86f0 234
+  s_65105c873dada3::t_58770e363c44f5 264
+src/api/impls/sandbox.rs
+  s_151bc885b62ca8::t_0d2e3583155c64 549-551
+  s_151bc885b62ca8::t_fc018709c2577e 552-554
+  s_151bc885b62ca8::t_b97e16d5f308ba 674-689,711
+  s_151bc885b62ca8::t_64e5aace7bd884 690-694,712
+src/sandbox/backend.rs
+  s_151bc885b62ca8::t_1b94a426fc52ac 240-257
+  s_151bc885b62ca8::t_4f352ecb1d4692 42-54
+services/gateway/internal/server.go
+  s_151bc885b62ca8::t_09c0a4fb57ad78 881-894
+  s_151bc885b62ca8::t_f8efb6085cc68b 169-178
+  s_151bc885b62ca8::t_5583732cb95900 617
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "0d14657617fb0a64d68f1d99d0a782aef8ac750e",
+  "prompts": {},
+  "humans": {
+    "h_495ba9d9ec15fe": {
+      "author": "chenxiaobo (E) <mydeplace@163.com>"
+    }
+  },
+  "sessions": {
+    "s_151bc885b62ca8": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a8f88e3306e0e63b67604fa",
+        "model": "glm-5.2__dev"
+      },
+      "human_author": "chenxiaobo (E) <mydeplace@163.com>",
+      "custom_attributes": {
+        "client_type": "ide",
+        "session_id": "6a8f88e3306e0e63b67604fa",
+        "edit_kind": "file_edit",
+        "tool_name": "Write",
+        "display_model_name": "GLM-5.2",
+        "operation_id": "6a991aab19e346f740df7308",
+        "source_scene": "agent",
+        "tool_use_id": "6a991aab19e346f740df7308",
+        "external_session_id": "6a8f88e3306e0e63b67604fa",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    },
+    "s_65105c873dada3": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9932e819e346f740df7df3",
+        "model": "glm-5.1__dev"
+      },
+      "human_author": "chenxiaobo (E) <mydeplace@163.com>",
+      "custom_attributes": {
+        "client_type": "ide",
+        "edit_kind": "file_edit",
+        "tool_name": "Write",
+        "source_scene": "agent",
+        "display_model_name": "GLM-5.1",
+        "runtime_client": "trae-tob-git-ai",
+        "external_session_id": "6a9932e819e346f740df7df3",
+        "session_id": "6a9932e819e346f740df7df3",
+        "operation_id": "6a9a6a8d30a953136eabfae1",
+        "tool_use_id": "6a9a6a8d30a953136eabfae1"
+      }
+    }
+  }
+}
