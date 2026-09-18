@@ -594,6 +594,46 @@ pub struct P2pConfig {
     pub fetch_timeout_ms: u64,
     #[config(default = 5u64)]
     pub peer_discovery_refresh_interval_secs: u64,
+    #[config(nested)]
+    pub urma: P2pUrmaConfig,
+}
+
+/// Settings for the `urma` P2P transport backend.
+/// Only consulted when `p2p.transport = "urma"`.
+#[derive(Debug, Deserialize, Clone, Config)]
+pub struct P2pUrmaConfig {
+    /// UB device name to open; empty picks the first available device.
+    #[config(default = "")]
+    pub device: String,
+    /// Send jetty slot count requested for the URMA context.
+    #[config(default = 8u32)]
+    pub jfs_count: u32,
+    /// Receive jetty slot count requested for the URMA context.
+    #[config(default = 4u32)]
+    pub jfr_count: u32,
+    /// Upper bound on simultaneously published (registered) segments.
+    #[config(default = 256u64)]
+    pub max_segments: u64,
+    /// Bounce-window size in bytes for one-sided READ transfers.
+    #[config(default = 4194304u64)]
+    pub read_chunk_bytes: u64,
+    /// Timeout in milliseconds for dynamic jetty bind attempts.
+    #[config(default = 10000u64)]
+    pub connect_timeout_ms: u64,
+    /// Idle seconds before a peer connection is torn down.
+    #[config(default = 300u64)]
+    pub idle_connection_ttl_secs: u64,
+    /// Upper bound on imported remote segments (LRU cap).
+    #[config(default = 1024u64)]
+    pub max_imported_segments: u64,
+    /// Statically configured peer endpoints ("eid_hex:uasid:jetty_id").
+    /// Used for peer discovery when no scheduler endpoint is configured.
+    #[config(
+        default = [],
+        env = "AENV_P2P_URMA_STATIC_PEERS",
+        parse_env = confique::env::parse::list_by_comma
+    )]
+    pub static_peers: Vec<String>,
 }
 
 macro_rules! impl_config_default {

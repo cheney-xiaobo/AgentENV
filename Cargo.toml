@@ -35,6 +35,9 @@ path = "src/lib.rs"
 
 [features]
 vendored-openssl = ["dep:openssl-sys", "openssl-sys/vendored"]
+# URMA (Unified Remote Memory Access) P2P transport backend.
+# Requires the UMDK SDK (liburma) at build time, e.g. from the umdk-urma RPM.
+p2p-urma = []
 
 [dev-dependencies]
 tracing = "0.1"
@@ -108,6 +111,7 @@ storage-util = { path = "storage/util" }
 dashmap = "6.1.0"
 io-uring = "0.7.9"
 tokio-tungstenite = "0.28"
+tokio-stream = "0.1"
 sha2 = "0.10"
 hmac = "0.12"
 subtle = "2.6"

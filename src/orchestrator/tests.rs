@@ -815,6 +815,7 @@ fn create_launch_plan_with_resources(sandbox_id: SandboxId) -> LaunchPlan {
         SandboxLaunchConfig::default(),
         transitional_metadata,
         NewTimeout::Set(Duration::from_secs(15)),
+        false,
     )
 }
 

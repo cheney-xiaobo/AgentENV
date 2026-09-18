@@ -1,38 +1,72 @@
+//! Test-only mock transports for unit tests.
+
 use std::collections::HashMap;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use super::error::{Error, Result};
+use super::transport::{P2pByteStream, P2pTransport};
+use super::types::{
+    P2pArtifactDescriptor, P2pArtifactKey, P2pArtifactProviderHint, P2pPublishRequest,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream;
+use futures::Stream;
 use tokio::sync::RwLock;
-use tracing::{debug, warn};
 
-use super::{
-    P2pArtifactDescriptor, P2pArtifactKey, P2pArtifactProvider, P2pArtifactProviderHint,
-    P2pByteStream, P2pEndpoint, P2pError, P2pPublishRequest, P2pPublishSource, P2pResult,
-    P2pTransport,
-};
+// ---------------------------------------------------------------------------
+// MockTransport — full-featured mock used across image-cache, overlaybd,
+// snapshot-manager and composite tests.
+// ---------------------------------------------------------------------------
 
-#[derive(Clone, Default)]
-pub(crate) struct MockTransport {
-    pub(crate) descriptors: Arc<RwLock<HashMap<P2pArtifactKey, P2pArtifactDescriptor>>>,
-    pub(crate) blobs: Arc<RwLock<HashMap<P2pArtifactKey, Bytes>>>,
-    pub(crate) lookup_count: Arc<AtomicUsize>,
-    pub(crate) fetch_count: Arc<AtomicUsize>,
-    pub(crate) fetch_bytes_count: Arc<AtomicUsize>,
-    pub(crate) fetch_range_count: Arc<AtomicUsize>,
-    pub(crate) publish_count: Arc<AtomicUsize>,
-    pub(crate) unpublish_count: Arc<AtomicUsize>,
-    pub(crate) unpublished_keys: Arc<RwLock<Vec<P2pArtifactKey>>>,
-    pub(crate) lookup_delay: Option<Duration>,
-    pub(crate) fetch_range_delay: Option<Duration>,
-    pub(crate) fail_lookup: Arc<AtomicBool>,
-    pub(crate) fail_publish: Arc<AtomicBool>,
-    pub(crate) fail_fetch_range_stream_after_first_chunk: Arc<AtomicBool>,
+/// Test mock that records calls and serves pre-loaded descriptors/blobs.
+pub struct MockTransport {
+    /// Pre-loaded artifact descriptors.
+    pub descriptors: RwLock<HashMap<P2pArtifactKey, P2pArtifactDescriptor>>,
+    /// Pre-loaded artifact bytes.
+    pub blobs: RwLock<HashMap<P2pArtifactKey, Bytes>>,
+    /// When true, `publish` returns an error.
+    pub fail_publish: AtomicBool,
+    /// When true, `lookup_with_hints` returns an error.
+    pub fail_lookup: AtomicBool,
+    /// When true, `fetch_byte_range` returns an error after the first chunk.
+    pub fail_fetch_range_stream_after_first_chunk: AtomicBool,
+    /// Number of `lookup` / `lookup_with_hints` calls.
+    pub lookup_count: AtomicUsize,
+    /// Number of `fetch` / `fetch_bytes` calls.
+    pub fetch_count: AtomicUsize,
+    /// Number of `fetch_byte_range` calls.
+    pub fetch_range_count: AtomicUsize,
+    /// Number of `publish` calls.
+    pub publish_count: AtomicUsize,
+    /// Keys passed to `unpublish`, in order.
+    pub unpublished_keys: RwLock<Vec<P2pArtifactKey>>,
+    /// Artificial delay before `lookup_with_hints` returns.
+    pub lookup_delay: Option<Duration>,
+    /// Artificial delay before `fetch_byte_range` returns.
+    pub fetch_range_delay: Option<Duration>,
+}
+
+impl Default for MockTransport {
+    fn default() -> Self {
+        Self {
+            descriptors: RwLock::new(HashMap::new()),
+            blobs: RwLock::new(HashMap::new()),
+            fail_publish: AtomicBool::new(false),
+            fail_lookup: AtomicBool::new(false),
+            fail_fetch_range_stream_after_first_chunk: AtomicBool::new(false),
+            lookup_count: AtomicUsize::new(0),
+            fetch_count: AtomicUsize::new(0),
+            fetch_range_count: AtomicUsize::new(0),
+            publish_count: AtomicUsize::new(0),
+            unpublished_keys: RwLock::new(Vec::new()),
+            lookup_delay: None,
+            fetch_range_delay: None,
+        }
+    }
 }
 
 #[async_trait]
@@ -41,52 +75,40 @@ impl P2pTransport for MockTransport {
         &self,
         key: &P2pArtifactKey,
         _hints: &[P2pArtifactProviderHint],
-    ) -> P2pResult<Option<P2pArtifactDescriptor>> {
-        debug!(?key, "looking up");
+    ) -> Result<Option<P2pArtifactDescriptor>> {
         self.lookup_count.fetch_add(1, Ordering::Relaxed);
-        if let Some(delay) = self.lookup_delay {
-            debug!(?key, delay_ms = delay.as_millis(), "lookup delay");
-            tokio::time::sleep(delay).await;
-        }
         if self.fail_lookup.load(Ordering::Relaxed) {
-            warn!(?key, "lookup forced failure");
-            return Err(P2pError::Internal(anyhow!("forced lookup failure")));
+            return Err(Error::internal_message("mock", "lookup disabled"));
         }
-        let result = self.descriptors.read().await.get(key).cloned();
-        debug!(?key, found = result.is_some(), "lookup result");
-        Ok(result)
+        if let Some(d) = self.lookup_delay {
+            tokio::time::sleep(d).await;
+        }
+        let descriptors = self.descriptors.read().await;
+        match descriptors.get(key) {
+            Some(desc) => Ok(Some(desc.clone())),
+            None => Ok(None),
+        }
     }
 
-    async fn fetch(
-        &self,
-        descriptor: &P2pArtifactDescriptor,
-        destination: &Path,
-    ) -> P2pResult<u64> {
-        debug!(key = ?descriptor.key, dest = %destination.display(), "fetching");
+    async fn fetch(&self, descriptor: &P2pArtifactDescriptor, destination: &Path) -> Result<u64> {
         self.fetch_count.fetch_add(1, Ordering::Relaxed);
         let blobs = self.blobs.read().await;
-        let bytes = blobs
+        let data = blobs
             .get(&descriptor.key)
-            .ok_or_else(|| P2pError::InvalidDescriptor {
-                reason: "missing test blob".to_string(),
-            })?;
-        tokio::fs::write(destination, bytes)
+            .ok_or_else(|| Error::internal_message("mock", "key not found"))?;
+        tokio::fs::write(destination, data.as_ref())
             .await
-            .map_err(|err| P2pError::Internal(anyhow!("write mock fetch: {err}")))?;
-        debug!(key = ?descriptor.key, size = bytes.len(), "fetch wrote bytes");
-        Ok(bytes.len() as u64)
+            .map_err(|e| Error::internal_message("mock write", e))?;
+        Ok(data.len() as u64)
     }
 
-    async fn fetch_bytes(&self, descriptor: &P2pArtifactDescriptor) -> P2pResult<Bytes> {
-        debug!(key = ?descriptor.key, "fetch bytes");
-        self.fetch_bytes_count.fetch_add(1, Ordering::Relaxed);
+    async fn fetch_bytes(&self, descriptor: &P2pArtifactDescriptor) -> Result<Bytes> {
+        self.fetch_count.fetch_add(1, Ordering::Relaxed);
         let blobs = self.blobs.read().await;
         blobs
             .get(&descriptor.key)
             .cloned()
-            .ok_or_else(|| P2pError::InvalidDescriptor {
-                reason: "missing test blob".to_string(),
-            })
+            .ok_or_else(|| Error::internal_message("mock", "key not found"))
     }
 
     async fn fetch_byte_range(
@@ -94,106 +116,190 @@ impl P2pTransport for MockTransport {
         descriptor: &P2pArtifactDescriptor,
         offset: u64,
         len: usize,
-    ) -> P2pResult<P2pByteStream> {
-        debug!(
-            key = ?descriptor.key,
-            offset,
-            len,
-            "fetching byte range"
-        );
+    ) -> Result<P2pByteStream> {
         self.fetch_range_count.fetch_add(1, Ordering::Relaxed);
-        if let Some(delay) = self.fetch_range_delay {
-            debug!(
-                key = ?descriptor.key,
-                delay_ms = delay.as_millis(),
-                "fetch byte range delay"
-            );
-            tokio::time::sleep(delay).await;
+        if let Some(d) = self.fetch_range_delay {
+            tokio::time::sleep(d).await;
         }
         let blobs = self.blobs.read().await;
-        let bytes = blobs
+        let data = blobs
             .get(&descriptor.key)
-            .ok_or_else(|| P2pError::InvalidDescriptor {
-                reason: "missing test blob".to_string(),
-            })?;
-        let start = usize::try_from(offset).map_err(|err| P2pError::InvalidDescriptor {
-            reason: format!("invalid offset: {err}"),
-        })?;
-        let end = start
-            .checked_add(len)
-            .ok_or_else(|| P2pError::InvalidDescriptor {
-                reason: "range overflow".to_string(),
-            })?;
-        if end > bytes.len() {
-            return Err(P2pError::InvalidDescriptor {
-                reason: "range outside blob".to_string(),
-            });
-        }
-        let chunks = bytes
-            .slice(start..end)
-            .chunks(1024)
-            .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
-            .collect::<Vec<P2pResult<Bytes>>>();
-        // Small chunks intentionally exercise consumers that handle multi-item streams.
-        let chunks = if self
-            .fail_fetch_range_stream_after_first_chunk
-            .load(Ordering::Relaxed)
-        {
-            chunks
-                .into_iter()
-                .take(1)
-                .chain(std::iter::once(Err(P2pError::Internal(anyhow!(
-                    "forced range stream failure"
-                )))))
-                .collect()
-        } else {
-            chunks
-        };
-        Ok(Box::pin(stream::iter(chunks)))
+            .ok_or_else(|| Error::internal_message("mock", "key not found"))?
+            .clone();
+        drop(blobs);
+        let start = offset as usize;
+        let end = start + len;
+        let slice = data.slice(start..end.min(data.len()));
+        Ok(Box::pin(futures::stream::once(async move { Ok(slice) })))
     }
 
-    async fn publish(&self, request: &P2pPublishRequest) -> P2pResult<()> {
-        debug!(key = ?request.key, "publishing");
+    async fn publish(&self, request: &P2pPublishRequest) -> Result<()> {
         self.publish_count.fetch_add(1, Ordering::Relaxed);
         if self.fail_publish.load(Ordering::Relaxed) {
-            warn!(key = ?request.key, "publish forced failure");
-            return Err(P2pError::Internal(anyhow!("forced publish failure")));
+            return Err(Error::internal_message("mock", "publish disabled"));
         }
-        let bytes: Bytes = match &request.source {
-            P2pPublishSource::Path(path) => tokio::fs::read(&path)
-                .await
-                .map_err(|err| P2pError::Internal(anyhow!("read mock publish: {err}")))?
-                .into(),
-            P2pPublishSource::Bytes(bytes) => bytes.clone(),
-        };
-        let descriptor = P2pArtifactDescriptor {
-            key: request.key.clone(),
-            providers: vec![P2pArtifactProvider::Local],
-            backend_locator: Some("mock".to_string()),
-            metadata: request.metadata.clone(),
-        };
-        self.descriptors
-            .write()
-            .await
-            .insert(request.key.clone(), descriptor);
-        self.blobs.write().await.insert(request.key.clone(), bytes);
-        debug!(key = ?request.key, "published");
+        let _ = request;
         Ok(())
     }
 
-    async fn unpublish(&self, key: &P2pArtifactKey) -> P2pResult<bool> {
-        self.unpublish_count.fetch_add(1, Ordering::Relaxed);
+    async fn unpublish(&self, key: &P2pArtifactKey) -> Result<bool> {
         self.unpublished_keys.write().await.push(key.clone());
-        let removed = self.descriptors.write().await.remove(key).is_some();
-        self.blobs.write().await.remove(key);
-        debug!(?key, removed, "unpublished");
-        Ok(removed)
+        Ok(false)
     }
 
-    fn local_endpoint(&self) -> Option<P2pEndpoint> {
-        Some(P2pEndpoint {
-            backend: "mock".to_string(),
-            address: "mock".to_string(),
-        })
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeP2pTransport — lightweight fake for composite-backend tests only.
+// ---------------------------------------------------------------------------
+
+/// Record of a publish call for assertions in tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedPublish {
+    pub key: String,
+}
+
+/// A trivial fake transport for composite-backend tests.
+///
+/// - `with_bytes`: stores one artifact and serves it from `fetch_bytes`.
+/// - `failing`: every operation returns an error.
+/// - `empty`: succeeds on publish (recording it) but returns `None` on lookup.
+#[derive(Clone)]
+pub struct FakeP2pTransport {
+    inner: Arc<FakeInner>,
+}
+
+struct FakeInner {
+    artifacts: std::sync::Mutex<HashMap<String, Bytes>>,
+    always_fail: bool,
+    publishes: std::sync::Mutex<Vec<RecordedPublish>>,
+}
+
+impl FakeP2pTransport {
+    pub fn with_bytes(key: &str, data: &[u8]) -> Self {
+        let mut artifacts = HashMap::new();
+        artifacts.insert(key.to_string(), Bytes::copy_from_slice(data));
+        Self {
+            inner: Arc::new(FakeInner {
+                artifacts: std::sync::Mutex::new(artifacts),
+                always_fail: false,
+                publishes: std::sync::Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    pub fn failing(_name: &str) -> Self {
+        Self {
+            inner: Arc::new(FakeInner {
+                artifacts: std::sync::Mutex::new(HashMap::new()),
+                always_fail: true,
+                publishes: std::sync::Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            inner: Arc::new(FakeInner {
+                artifacts: std::sync::Mutex::new(HashMap::new()),
+                always_fail: false,
+                publishes: std::sync::Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    pub fn recorded_publishes(&self) -> Vec<RecordedPublish> {
+        self.inner.publishes.lock().unwrap().clone()
+    }
+
+    fn fail(&self) -> Result<()> {
+        if self.inner.always_fail {
+            Err(Error::internal_message("fake", "always-fail"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait]
+impl P2pTransport for FakeP2pTransport {
+    async fn lookup_with_hints(
+        &self,
+        key: &P2pArtifactKey,
+        _hints: &[P2pArtifactProviderHint],
+    ) -> Result<Option<P2pArtifactDescriptor>> {
+        self.fail()?;
+        let artifacts = self.inner.artifacts.lock().unwrap();
+        if artifacts.contains_key(key) {
+            Ok(Some(P2pArtifactDescriptor {
+                key: key.clone(),
+                providers: Vec::new(),
+                backend_locator: None,
+                metadata: serde_json::Value::Null,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn fetch(&self, descriptor: &P2pArtifactDescriptor, _destination: &Path) -> Result<u64> {
+        self.fail()?;
+        let artifacts = self.inner.artifacts.lock().unwrap();
+        match artifacts.get(&descriptor.key) {
+            Some(b) => Ok(b.len() as u64),
+            None => Err(Error::internal_message("fake", "key not found")),
+        }
+    }
+
+    async fn fetch_bytes(&self, descriptor: &P2pArtifactDescriptor) -> Result<Bytes> {
+        self.fail()?;
+        let artifacts = self.inner.artifacts.lock().unwrap();
+        match artifacts.get(&descriptor.key) {
+            Some(b) => Ok(b.clone()),
+            None => Err(Error::internal_message("fake", "key not found")),
+        }
+    }
+
+    async fn fetch_byte_range(
+        &self,
+        descriptor: &P2pArtifactDescriptor,
+        offset: u64,
+        len: usize,
+    ) -> Result<P2pByteStream> {
+        self.fail()?;
+        let artifacts = self.inner.artifacts.lock().unwrap();
+        let data = artifacts
+            .get(&descriptor.key)
+            .ok_or_else(|| Error::internal_message("fake", "key not found"))?
+            .clone();
+        drop(artifacts);
+        let start = offset as usize;
+        let end = start + len;
+        let slice = data.slice(start..end.min(data.len()));
+        Ok(Box::pin(futures::stream::once(async move { Ok(slice) })))
+    }
+
+    async fn publish(&self, request: &P2pPublishRequest) -> Result<()> {
+        self.fail()?;
+        self.inner
+            .publishes
+            .lock()
+            .unwrap()
+            .push(RecordedPublish {
+                key: request.key.clone(),
+            });
+        Ok(())
+    }
+
+    async fn unpublish(&self, _key: &P2pArtifactKey) -> Result<bool> {
+        self.fail()?;
+        Ok(false)
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
     }
 }

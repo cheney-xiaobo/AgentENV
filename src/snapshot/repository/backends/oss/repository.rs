@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1340,6 +1340,7 @@ fn validate_publish_manifest_image_configs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::SandboxResources;
     use object_store_operator::CredentialSource;
     use serde_json::json;
 
