@@ -150,11 +150,7 @@ impl SnapshotRuntimeResolver for OssRuntimeResolver {
             .await?;
 
         // ── memory image config ────────────────────────────────────
-        let memory_layers: Vec<OverlaybdLayerRef> = committed
-            .memory_layers
-            .iter()
-            .map(|m| OverlaybdLayerRef::Managed(m.clone()))
-            .collect();
+        let memory_layers: Vec<OverlaybdLayerRef> = committed.memory_layers.clone();
         let mem_cache_key = runtime_image_cache_key(&id, "memory/image.json");
         let mem_image_config_path = self
             .materialize_layers_and_pin(
@@ -269,6 +265,7 @@ impl OssRuntimeResolver {
             .enumerate()
             .filter_map(|(index, layer)| match layer {
                 OverlaybdLayerRef::Managed(layer) => Some((index, layer.digest.clone())),
+                OverlaybdLayerRef::SharedFS(_) => None,
                 OverlaybdLayerRef::External(_) => None,
             })
             .collect::<Vec<_>>();

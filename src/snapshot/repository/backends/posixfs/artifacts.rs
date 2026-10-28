@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use overlaybd::config::load_image_config as load_overlaybd_image_config;
 use overlaybd::dense_export;
 use overlaybd::layer_metadata::read_overlaybd_layer_uuid;
@@ -56,7 +57,11 @@ impl PosixFsArtifactStore {
             committed_layout.path(SNAPSHOT_ARTIFACT_LAYOUT.firecracker_manifest),
             manifest,
         )?;
-        let memory_layers = self.derive_memory_layers(&manifest.memory.image_config_path)?;
+        let memory_layers = self
+            .derive_memory_layers(&manifest.memory.image_config_path)?
+            .into_iter()
+            .map(OverlaybdLayerRef::Managed)
+            .collect::<Vec<_>>();
 
         let attached_drives = manifest
             .attached_drives
@@ -697,8 +702,41 @@ fn copy_file_with_sha256(source: &Path, destination: &Path) -> RepositoryResult<
 #[derive(Debug)]
 pub(crate) struct CollectedBuiltArtifacts {
     pub(crate) rootfs_layers: Vec<OverlaybdLayerRef>,
-    pub(crate) memory_layers: Vec<ManagedLayer>,
+    pub(crate) memory_layers: Vec<OverlaybdLayerRef>,
     pub(crate) attached_drives: Vec<CommittedAttachedDrive>,
+}
+
+#[async_trait]
+impl crate::snapshot::repository::backends::sharedfs::LayerStorage for PosixFsArtifactStore {
+    async fn import_disk_base_layer(
+        &self,
+        source: &Path,
+        digest: &str,
+        size: u64,
+    ) -> RepositoryResult<ManagedLayer> {
+        self.import_managed_layer_with_descriptor(source, digest, size)
+    }
+
+    async fn import_memory_base_layer(
+        &self,
+        source: &Path,
+        digest: &str,
+        size: u64,
+    ) -> RepositoryResult<ManagedLayer> {
+        self.import_managed_layer_with_descriptor(source, digest, size)
+    }
+
+    fn managed_base_layer_config(&self, layer: &ManagedLayer) -> overlaybd::config::LayerConfig {
+        overlaybd::config::LayerConfig {
+            file: PosixFsSnapshotArtifactLayout::managed_layer_path(&self.root, &layer.digest)
+                .display()
+                .to_string(),
+            digest: layer.digest.clone(),
+            size: layer.size,
+            uuid: layer.uuid.clone().unwrap_or_default(),
+            ..Default::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -849,6 +887,9 @@ mod tests {
                     crate::snapshot::OverlaybdLayerRef::External(_) => {
                         panic!("expected managed rootfs layer")
                     }
+                    crate::snapshot::OverlaybdLayerRef::SharedFS(_) => {
+                        panic!("expected managed rootfs layer")
+                    }
                 }
             }
         };
@@ -877,6 +918,9 @@ mod tests {
                 assert!(tempdir.path().join(path).exists());
             }
             crate::snapshot::OverlaybdLayerRef::External(_) => {
+                panic!("expected managed rootfs layer")
+            }
+            crate::snapshot::OverlaybdLayerRef::SharedFS(_) => {
                 panic!("expected managed rootfs layer")
             }
         }
@@ -915,13 +959,19 @@ mod tests {
             crate::snapshot::OverlaybdLayerRef::External(_) => {
                 panic!("expected managed rootfs layer")
             }
+            crate::snapshot::OverlaybdLayerRef::SharedFS(_) => {
+                panic!("expected managed rootfs layer")
+            }
         }
         assert_same_inode(
             &memory_lower,
             &tempdir
                 .path()
                 .join("managed-layers")
-                .join(managed_layer_file_name(&built.memory_layers[0].digest)),
+                .join(managed_layer_file_name(match &built.memory_layers[0] {
+                    OverlaybdLayerRef::Managed(m) => &m.digest,
+                    _ => panic!("expected managed memory layer"),
+                })),
         );
     }
 
@@ -964,6 +1014,9 @@ mod tests {
                 assert!(tempdir.path().join(path).exists());
             }
             crate::snapshot::OverlaybdLayerRef::External(_) => {
+                panic!("expected managed rootfs layer")
+            }
+            crate::snapshot::OverlaybdLayerRef::SharedFS(_) => {
                 panic!("expected managed rootfs layer")
             }
         }
@@ -1066,7 +1119,10 @@ mod tests {
             .expect("import built artifacts");
 
         assert_eq!(built.memory_layers.len(), 1);
-        let managed = &built.memory_layers[0];
+        let managed = match &built.memory_layers[0] {
+            OverlaybdLayerRef::Managed(m) => m,
+            _ => panic!("expected managed memory layer"),
+        };
         assert_eq!(managed.digest, zfile_descriptor.sha256);
         assert_eq!(managed.size, zfile_descriptor.size);
         // ZFile wraps the raw LSMT header, so no layer UUID is exposed.

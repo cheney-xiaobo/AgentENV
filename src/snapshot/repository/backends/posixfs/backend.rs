@@ -34,6 +34,7 @@ pub struct PosixFsBackendConfig {
 
 pub struct PosixFsBackend {
     repository: Arc<dyn SnapshotRepository>,
+    layers: Arc<dyn super::super::sharedfs::LayerStorage>,
     runtime_resolver: Arc<dyn SnapshotRuntimeResolver>,
 }
 
@@ -72,6 +73,8 @@ impl PosixFsBackend {
         let runtime_cache_root = runtime_cache_root.unwrap_or_else(|| cache_root.join("runtime"));
         let catalog_store = Arc::new(PosixFsCatalogStore::new(root.clone()));
         let artifact_store = Arc::new(PosixFsArtifactStore::new(root.clone()));
+        let layers: Arc<dyn super::super::sharedfs::LayerStorage> =
+            artifact_store.clone() as Arc<dyn super::super::sharedfs::LayerStorage>;
         let repository: Arc<dyn SnapshotRepository> = Arc::new(PosixFsSnapshotRepository::new(
             catalog_store,
             artifact_store,
@@ -82,6 +85,7 @@ impl PosixFsBackend {
 
         Self {
             repository,
+            layers,
             runtime_resolver,
         }
     }
@@ -96,6 +100,12 @@ impl PosixFsBackend {
         Arc::clone(&self.runtime_resolver)
     }
 
+    /// Returns the artifact store as a [`LayerStorage`] adapter.
+    #[allow(dead_code)]
+    pub(crate) fn layers(&self) -> Arc<dyn super::super::sharedfs::LayerStorage> {
+        Arc::clone(&self.layers)
+    }
+
     /// Splits the backend into its repository and runtime-resolution components.
     pub fn into_parts(
         self,
@@ -104,6 +114,17 @@ impl PosixFsBackend {
         Arc<dyn SnapshotRuntimeResolver>,
     ) {
         (self.repository, self.runtime_resolver)
+    }
+
+    /// Splits the backend into repository, layer-storage and runtime resolver.
+    pub(crate) fn into_parts_with_layers(
+        self,
+    ) -> (
+        Arc<dyn SnapshotRepository>,
+        Arc<dyn super::super::sharedfs::LayerStorage>,
+        Arc<dyn SnapshotRuntimeResolver>,
+    ) {
+        (self.repository, self.layers, self.runtime_resolver)
     }
 }
 

@@ -109,6 +109,8 @@ pub(crate) fn resolve_snapshot_image_target(
                 OverlaybdLayerRef::External(layer) => (!layer.repo_blob_url.starts_with("s3://"))
                     .then_some(layer.repo_blob_url.as_str()),
                 OverlaybdLayerRef::Managed(_) => None,
+                // SharedFS layers are local mount paths, not registry sources.
+                OverlaybdLayerRef::SharedFS(_) => None,
             }
         }))?
     };

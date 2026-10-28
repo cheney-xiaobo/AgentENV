@@ -30,6 +30,29 @@ use super::attached_drives::resolve_attached_drives;
 use super::pagination::PaginationCursor;
 use super::ApiImpl;
 
+fn snapshot_store_from_request(
+    snapshot_manager: &crate::snapshot::SnapshotManager,
+    raw: Option<&str>,
+) -> Result<crate::snapshot::SnapshotStore, models::Error> {
+    match raw {
+        None | Some("default") => Ok(crate::snapshot::SnapshotStore::Default),
+        Some("shared_fs") => {
+            if snapshot_manager.shared_fs_enabled() {
+                Ok(crate::snapshot::SnapshotStore::SharedFs)
+            } else {
+                Err(ApiImpl::error(
+                    400,
+                    "snapshotStore 'shared_fs' is not enabled on this server".to_string(),
+                ))
+            }
+        }
+        Some(other) => Err(ApiImpl::error(
+            400,
+            format!("unknown snapshotStore '{}'", other),
+        )),
+    }
+}
+
 fn sandbox_not_found(id: impl Into<String>) -> models::Error {
     ApiImpl::error(404, format!("sandbox {} not found", id.into()))
 }
@@ -627,10 +650,20 @@ impl Sandboxes<()> for ApiImpl {
         body: &models::NewSandbox,
     ) -> Result<SandboxesPostResponse, ()> {
         let timer = SandboxStageTimer::new("create_warm");
+        let store = match snapshot_store_from_request(
+            &self.snapshot_manager,
+            body.snapshot_store.as_deref(),
+        ) {
+            Ok(store) => store,
+            Err(error) => {
+                return Ok(SandboxesPostResponse::Status400_BadRequest(error));
+            }
+        };
         let snapshot = match timer
             .time(
                 "load_snapshot",
-                self.snapshot_manager.load_runnable(&body.template_id),
+                self.snapshot_manager
+                    .load_runnable_from(store, &body.template_id),
             )
             .await
         {
@@ -1181,6 +1214,16 @@ impl Sandboxes<()> for ApiImpl {
             None => None,
         };
 
+        let store = match snapshot_store_from_request(
+            &self.snapshot_manager,
+            body.snapshot_store.as_deref(),
+        ) {
+            Ok(store) => store,
+            Err(error) => {
+                return Ok(SandboxesSandboxIdSnapshotsPostResponse::Status400_BadRequest(error));
+            }
+        };
+
         let capture = match timer
             .time("capture", self.orchestrator.capture_snapshot(sandbox_id))
             .await
@@ -1211,7 +1254,8 @@ impl Sandboxes<()> for ApiImpl {
         let published = match timer
             .time(
                 "publish",
-                self.snapshot_manager.publish_captured(
+                self.snapshot_manager.publish_captured_from(
+                    store,
                     SnapshotPublishMetadata {
                         id: SnapshotId::generate(),
                         alias: alias.clone(),

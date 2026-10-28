@@ -27,6 +27,7 @@ use self::resolver::OssRuntimeResolver;
 /// node-local runtime resolver that materializes runnable overlaybd configs.
 pub struct OssBackend {
     repository: Arc<dyn SnapshotRepository>,
+    layers: Arc<dyn super::sharedfs::LayerStorage>,
     runtime_resolver: Arc<dyn SnapshotRuntimeResolver>,
 }
 
@@ -57,6 +58,32 @@ impl OssBackend {
         store: Arc<dyn OverlaybdLayerStore>,
         p2p_transport: Option<Arc<dyn P2pTransport>>,
     ) -> Result<Self> {
+        let (repository, layers, runtime_resolver) = Self::build_parts(
+            config,
+            snapshot_image_storage,
+            cache,
+            runtime_root,
+            store,
+            p2p_transport,
+        )?;
+        Ok(Self {
+            repository,
+            layers,
+            runtime_resolver,
+        })
+    }
+
+    /// Builds the concrete OSS components and splits the same repository
+    /// instance into a snapshot-repository trait object and a [`LayerStorage`]
+    /// trait object (both wrap the same `OssSnapshotRepository`).
+    fn build_parts(
+        config: &OssBackendConfig,
+        snapshot_image_storage: SnapshotImageStoragePolicy,
+        cache: Arc<LocalArtifactCache>,
+        runtime_root: PathBuf,
+        store: Arc<dyn OverlaybdLayerStore>,
+        p2p_transport: Option<Arc<dyn P2pTransport>>,
+    ) -> Result<super::BackendParts> {
         let config = NormalizedOssConfig::new(config, snapshot_image_storage)?;
         let managed_layers_repo_blob_url = config.managed_layers_repo_blob_url();
         let client = Arc::new(OssClient::new(
@@ -68,10 +95,14 @@ impl OssBackend {
             config.addressing_style(),
         )?);
 
-        let repository: Arc<dyn SnapshotRepository> = Arc::new(OssSnapshotRepository::new(
+        let concrete = Arc::new(OssSnapshotRepository::new(
             Arc::clone(&client),
             config.snapshot_image_storage(),
         ));
+        let repository: Arc<dyn SnapshotRepository> =
+            concrete.clone() as Arc<dyn SnapshotRepository>;
+        let layers: Arc<dyn super::sharedfs::LayerStorage> =
+            concrete as Arc<dyn super::sharedfs::LayerStorage>;
 
         std::fs::create_dir_all(&runtime_root)
             .with_context(|| format!("create oss runtime root '{}'", runtime_root.display()))?;
@@ -84,10 +115,13 @@ impl OssBackend {
             p2p_transport,
         )?);
 
-        Ok(Self {
-            repository,
-            runtime_resolver,
-        })
+        Ok((repository, layers, runtime_resolver))
+    }
+
+    /// Returns the concrete repository's [`LayerStorage`] adapter.
+    #[allow(dead_code)]
+    pub(crate) fn layers(&self) -> Arc<dyn super::sharedfs::LayerStorage> {
+        Arc::clone(&self.layers)
     }
 
     /// Splits the backend into its repository and runtime-resolution components.
@@ -98,5 +132,16 @@ impl OssBackend {
         Arc<dyn SnapshotRuntimeResolver>,
     ) {
         (self.repository, self.runtime_resolver)
+    }
+
+    /// Splits the backend into repository, layer-storage and runtime resolver.
+    pub(crate) fn into_parts_with_layers(
+        self,
+    ) -> (
+        Arc<dyn SnapshotRepository>,
+        Arc<dyn super::sharedfs::LayerStorage>,
+        Arc<dyn SnapshotRuntimeResolver>,
+    ) {
+        (self.repository, self.layers, self.runtime_resolver)
     }
 }

@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
+use serde::de::{self, Deserializer};
 
 use crate::sandbox::CustomExtensionParams;
 use crate::virtualization::VirtualizationMode;
@@ -281,6 +282,51 @@ pub struct StartupCommand {
     pub context: CommandContext,
 }
 
+/// Deserializes `memory_layers` accepting both the new tagged
+/// `Vec<OverlaybdLayerRef>` format and the legacy plain `Vec<ManagedLayer>`
+/// format (each entry wrapped into `OverlaybdLayerRef::Managed`).
+fn deserialize_memory_layers_compat<'de, D>(
+    deserializer: D,
+) -> Result<Vec<OverlaybdLayerRef>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::SeqAccess;
+
+    struct MemoryLayersVisitor;
+
+    impl<'de> de::Visitor<'de> for MemoryLayersVisitor {
+        type Value = Vec<OverlaybdLayerRef>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a sequence of memory layer references")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut out = Vec::new();
+            while let Some(value) = seq.next_element::<serde_json::Value>()? {
+                // Try new tagged format first.
+                if let Ok(layer) =
+                    serde_json::from_value::<OverlaybdLayerRef>(value.clone())
+                {
+                    out.push(layer);
+                    continue;
+                }
+                // Fall back to legacy plain ManagedLayer.
+                let managed = serde_json::from_value::<ManagedLayer>(value)
+                    .map_err(de::Error::custom)?;
+                out.push(OverlaybdLayerRef::Managed(managed));
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_seq(MemoryLayersVisitor)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommittedSnapshot {
     pub context: CommandContext,
@@ -293,8 +339,15 @@ pub struct CommittedSnapshot {
     pub image_configs: ImageConfigs,
     pub rootfs_layers: Vec<OverlaybdLayerRef>,
     pub attached_drives: Vec<CommittedAttachedDrive>,
-    /// Managed overlaybd layers for the memory snapshot image, ordered bottom-up.
-    pub memory_layers: Vec<ManagedLayer>,
+    /// Overlaybd layers for the memory snapshot image, ordered bottom-up.
+    /// Mirrors `rootfs_layers`: `Managed` for backend-stored base layers,
+    /// `SharedFS` for delta layers captured onto the shared filesystem.
+    ///
+    /// Backward compatible: legacy records that store plain `ManagedLayer`
+    /// objects (without the `Managed` enum tag) are deserialized as
+    /// `OverlaybdLayerRef::Managed` automatically.
+    #[serde(default, deserialize_with = "deserialize_memory_layers_compat")]
+    pub memory_layers: Vec<OverlaybdLayerRef>,
     #[serde(default)]
     pub disk_publications: Vec<PersistedDiskImagePublication>,
     /// Opaque user-provided JSON passed through to the custom extension hooks.
@@ -422,6 +475,20 @@ fn now_unix_ms() -> i64 {
 pub enum OverlaybdLayerRef {
     Managed(ManagedLayer),
     External(ExternalLayer),
+    /// Snapshot delta layer stored on a node-shared filesystem, referenced by
+    /// a node-identical absolute mount path. All nodes must mount the shared
+    /// filesystem at this path before the server starts.
+    SharedFS(SharedFSPathLayer),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharedFSPathLayer {
+    /// Node-identical absolute path on the shared filesystem.
+    pub path: String,
+    pub digest: String,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -42,6 +42,7 @@ fn layer_digest_size(layer: &OverlaybdLayerRef) -> (&str, u64) {
     match layer {
         OverlaybdLayerRef::External(external) => (&external.digest, external.size),
         OverlaybdLayerRef::Managed(managed) => (&managed.digest, managed.size),
+        OverlaybdLayerRef::SharedFS(shared) => (&shared.digest, shared.size),
     }
 }
 
@@ -252,6 +253,19 @@ impl SnapshotImageService {
                 let path = self.materialize_managed_layer(managed, tempdir).await?;
                 self.regctl
                     .blob_put(target_repository, layer_digest, &path)
+                    .await
+            }
+            OverlaybdLayerRef::SharedFS(shared) => {
+                // SharedFS layers live on the node's shared filesystem and are
+                // opaque to registry export; refuse rather than guess.
+                let path = Path::new(&shared.path);
+                if !path.exists() {
+                    return Err(RepositoryError::ArtifactNotFound {
+                        artifact: format!("shared-fs layer at {}", path.display()),
+                    });
+                }
+                self.regctl
+                    .blob_put(target_repository, layer_digest, path)
                     .await
             }
             OverlaybdLayerRef::External(external) => {

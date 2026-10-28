@@ -11,11 +11,11 @@ use crate::p2p::P2pTransport;
 use crate::sandbox::{
     CapturedSandboxSnapshot, FirecrackerCapturedSnapshot, FirecrackerSnapshotManifest,
 };
-use crate::snapshot::repository::backends::build_snapshot_backend;
+use crate::snapshot::repository::backends::{build_shared_fs_backend, build_snapshot_backend};
 use crate::snapshot::repository::interfaces::{SnapshotRepository, SnapshotRuntimeResolver};
 use crate::snapshot::repository::{RepositoryError, SnapshotListFilter};
 use crate::snapshot::{
-    ManagedLayer, OverlaybdLayerRef, RunnableSnapshot, SnapshotId, SnapshotPublishMetadata,
+    OverlaybdLayerRef, RunnableSnapshot, SnapshotId, SnapshotPublishMetadata,
     SnapshotRecord,
 };
 
@@ -27,16 +27,17 @@ fn managed_layer_uuids(layers: &[OverlaybdLayerRef]) -> HashSet<String> {
         .iter()
         .filter_map(|layer| match layer {
             OverlaybdLayerRef::Managed(managed) => managed.uuid.clone(),
+            OverlaybdLayerRef::SharedFS(shared) => shared.uuid.clone(),
             OverlaybdLayerRef::External(_) => None,
         })
         .collect()
 }
 
-fn managed_layer_uuids_from_managed(layers: &[ManagedLayer]) -> HashSet<String> {
-    layers
-        .iter()
-        .filter_map(|layer| layer.uuid.clone())
-        .collect()
+/// Selects which snapshot store a request operates on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapshotStore {
+    Default,
+    SharedFs,
 }
 
 #[derive(Clone)]
@@ -51,16 +52,56 @@ pub struct SnapshotManager {
     repository: Arc<dyn SnapshotRepository>,
     runtime_resolver: Arc<dyn SnapshotRuntimeResolver>,
     p2p_transport: Option<Arc<dyn P2pTransport>>,
+    shared_fs: Option<(
+        Arc<dyn SnapshotRepository>,
+        Arc<dyn SnapshotRuntimeResolver>,
+    )>,
+}
+
+type BackendPair = (
+    Arc<dyn SnapshotRepository>,
+    Arc<dyn SnapshotRuntimeResolver>,
+);
+
+impl SnapshotManager {
+    /// Resolves the store pair for a request-level store selector.
+    fn backend(&self, store: SnapshotStore) -> Option<&BackendPair> {
+        match store {
+            SnapshotStore::Default => None,
+            SnapshotStore::SharedFs => self.shared_fs.as_ref(),
+        }
+    }
+
+    fn resolve_repository(&self, store: SnapshotStore) -> Arc<dyn SnapshotRepository> {
+        match self.backend(store) {
+            Some((repository, _)) => Arc::clone(repository),
+            None => Arc::clone(&self.repository),
+        }
+    }
+
+    fn resolve_runtime_resolver(&self, store: SnapshotStore) -> Arc<dyn SnapshotRuntimeResolver> {
+        match self.backend(store) {
+            Some((_, resolver)) => Arc::clone(resolver),
+            None => Arc::clone(&self.runtime_resolver),
+        }
+    }
+
+    /// Whether a shared-filesystem store is enabled in this process.
+    pub fn shared_fs_enabled(&self) -> bool {
+        self.shared_fs.is_some()
+    }
 }
 
 impl SnapshotManager {
     /// Builds a manager using the configured repository backend.
     pub fn new(p2p_transport: Option<Arc<dyn P2pTransport>>) -> anyhow::Result<Self> {
         let (repository, runtime_resolver) = build_snapshot_backend(p2p_transport.clone())?;
-        Ok(Self::from_parts(
+        let shared_fs = build_shared_fs_backend(p2p_transport.clone())?;
+        Ok(Self::from_parts_with_shared_fs(
             repository,
             runtime_resolver,
             p2p_transport,
+            shared_fs,
         ))
     }
 
@@ -70,10 +111,24 @@ impl SnapshotManager {
         runtime_resolver: Arc<dyn SnapshotRuntimeResolver>,
         p2p_transport: Option<Arc<dyn P2pTransport>>,
     ) -> Self {
+        Self::from_parts_with_shared_fs(repository, runtime_resolver, p2p_transport, None)
+    }
+
+    /// Builds a manager also holding an optional shared-filesystem store.
+    pub fn from_parts_with_shared_fs(
+        repository: Arc<dyn SnapshotRepository>,
+        runtime_resolver: Arc<dyn SnapshotRuntimeResolver>,
+        p2p_transport: Option<Arc<dyn P2pTransport>>,
+        shared_fs: Option<(
+            Arc<dyn SnapshotRepository>,
+            Arc<dyn SnapshotRuntimeResolver>,
+        )>,
+    ) -> Self {
         Self {
             repository,
             runtime_resolver,
             p2p_transport,
+            shared_fs,
         }
     }
 
@@ -104,6 +159,16 @@ impl SnapshotManager {
         metadata: SnapshotPublishMetadata,
         captured_snapshot: CapturedSandboxSnapshot,
     ) -> crate::snapshot::RepositoryResult<SnapshotRecord> {
+        self.publish_captured_from(SnapshotStore::Default, metadata, captured_snapshot)
+            .await
+    }
+
+    pub async fn publish_captured_from(
+        &self,
+        store: SnapshotStore,
+        metadata: SnapshotPublishMetadata,
+        captured_snapshot: CapturedSandboxSnapshot,
+    ) -> crate::snapshot::RepositoryResult<SnapshotRecord> {
         let manifest = captured_snapshot
             .downcast_ref::<FirecrackerCapturedSnapshot>()
             .map(|snapshot| snapshot.manifest().clone())
@@ -112,7 +177,7 @@ impl SnapshotManager {
             })?;
 
         let record = self
-            .repository
+            .resolve_repository(store)
             .publish(metadata.clone(), manifest.clone())
             .await?;
         self.publish_p2p_artifacts(&record, &manifest).await;
@@ -155,7 +220,7 @@ impl SnapshotManager {
             &manifest.rootfs.image_config_path,
             &rootfs_uuids,
         ));
-        let memory_uuids = managed_layer_uuids_from_managed(&committed.memory_layers);
+        let memory_uuids = managed_layer_uuids(&committed.memory_layers);
         artifacts.extend(SnapshotP2pArtifact::local_overlaybd_layers(
             &manifest.memory.image_config_path,
             &memory_uuids,
@@ -192,12 +257,21 @@ impl SnapshotManager {
             .await;
     }
 
-    /// Loads a snapshot record by id or alias.
+    /// Loads a snapshot record by id or alias on the default store.
     pub async fn get(
         &self,
         id_or_alias: impl AsRef<str>,
     ) -> anyhow::Result<Option<SnapshotRecord>> {
-        self.repository
+        self.get_from(SnapshotStore::Default, id_or_alias).await
+    }
+
+    /// Loads a snapshot record by id or alias on a selected store.
+    pub async fn get_from(
+        &self,
+        store: SnapshotStore,
+        id_or_alias: impl AsRef<str>,
+    ) -> anyhow::Result<Option<SnapshotRecord>> {
+        self.resolve_repository(store)
             .get(id_or_alias.as_ref())
             .await
             .with_context(|| {
@@ -208,9 +282,18 @@ impl SnapshotManager {
             })
     }
 
-    /// Lists snapshot records that match the given filter.
+    /// Lists snapshot records that match the given filter on the default store.
     pub async fn list(&self, filter: SnapshotListFilter) -> anyhow::Result<Vec<SnapshotRecord>> {
-        self.repository
+        self.list_from(SnapshotStore::Default, filter).await
+    }
+
+    /// Lists snapshot records on a selected store.
+    pub async fn list_from(
+        &self,
+        store: SnapshotStore,
+        filter: SnapshotListFilter,
+    ) -> anyhow::Result<Vec<SnapshotRecord>> {
+        self.resolve_repository(store)
             .list(filter)
             .await
             .context("list committed snapshots through repository")
@@ -221,7 +304,16 @@ impl SnapshotManager {
     /// Returns `Ok(())` on success. The operation is idempotent:
     /// if the snapshot does not exist, it is still considered success.
     pub async fn delete(&self, id_or_alias: impl AsRef<str>) -> anyhow::Result<()> {
-        self.repository
+        self.delete_from(SnapshotStore::Default, id_or_alias).await
+    }
+
+    /// Deletes a snapshot by id or alias on a selected store.
+    pub async fn delete_from(
+        &self,
+        store: SnapshotStore,
+        id_or_alias: impl AsRef<str>,
+    ) -> anyhow::Result<()> {
+        self.resolve_repository(store)
             .delete(id_or_alias.as_ref())
             .await
             .with_context(|| {
@@ -232,22 +324,47 @@ impl SnapshotManager {
             })
     }
 
-    /// Resolves an alias to its committed snapshot id.
+    /// Resolves an alias to its committed snapshot id on the default store.
     pub async fn resolve_committed_alias(&self, alias: &str) -> anyhow::Result<Option<SnapshotId>> {
-        self.repository.resolve_alias(alias).await.with_context(|| {
-            format!("resolve committed snapshot alias '{alias}' through repository")
-        })
+        self.resolve_committed_alias_from(SnapshotStore::Default, alias)
+            .await
     }
 
-    /// Resolves a committed snapshot into node-local runnable artifact paths.
+    /// Resolves an alias on a selected store.
+    pub async fn resolve_committed_alias_from(
+        &self,
+        store: SnapshotStore,
+        alias: &str,
+    ) -> anyhow::Result<Option<SnapshotId>> {
+        self.resolve_repository(store)
+            .resolve_alias(alias)
+            .await
+            .with_context(|| {
+                format!("resolve committed snapshot alias '{alias}' through repository")
+            })
+    }
+
+    /// Resolves a committed snapshot into node-local runnable artifact paths
+    /// on a selected store.
+    pub async fn resolve_runnable_from(
+        &self,
+        store: SnapshotStore,
+        snapshot: SnapshotRecord,
+    ) -> anyhow::Result<RunnableSnapshot> {
+        self.resolve_runtime_resolver(store)
+            .resolve(Arc::new(snapshot))
+            .await
+            .context("resolve committed snapshot into runnable runtime paths")
+    }
+
+    /// Resolves a committed snapshot into node-local runnable artifact paths
+    /// on the default store.
     pub async fn resolve_runnable(
         &self,
         snapshot: SnapshotRecord,
     ) -> anyhow::Result<RunnableSnapshot> {
-        self.runtime_resolver
-            .resolve(Arc::new(snapshot))
+        self.resolve_runnable_from(SnapshotStore::Default, snapshot)
             .await
-            .context("resolve committed snapshot into runnable runtime paths")
     }
 
     /// Loads a committed snapshot and immediately resolves it into runnable state.
@@ -259,10 +376,21 @@ impl SnapshotManager {
         &self,
         id_or_alias: impl AsRef<str>,
     ) -> anyhow::Result<Option<RunnableSnapshot>> {
-        let Some(snapshot) = self.get(id_or_alias.as_ref()).await? else {
+        self.load_runnable_from(SnapshotStore::Default, id_or_alias)
+            .await
+    }
+
+    /// Loads a committed snapshot on a selected store and resolves it into
+    /// runnable state.
+    pub async fn load_runnable_from(
+        &self,
+        store: SnapshotStore,
+        id_or_alias: impl AsRef<str>,
+    ) -> anyhow::Result<Option<RunnableSnapshot>> {
+        let Some(snapshot) = self.get_from(store, id_or_alias.as_ref()).await? else {
             return Ok(None);
         };
-        self.resolve_runnable(snapshot).await.map(Some)
+        self.resolve_runnable_from(store, snapshot).await.map(Some)
     }
 
     /// Atomically transitions one template build from waiting to building.
@@ -270,7 +398,16 @@ impl SnapshotManager {
         &self,
         id: &SnapshotId,
     ) -> crate::snapshot::RepositoryResult<SnapshotRecord> {
-        self.repository.try_start_build(id).await
+        self.try_start_build_from(SnapshotStore::Default, id).await
+    }
+
+    /// Transitions one template build on a selected store.
+    pub async fn try_start_build_from(
+        &self,
+        store: SnapshotStore,
+        id: &SnapshotId,
+    ) -> crate::snapshot::RepositoryResult<SnapshotRecord> {
+        self.resolve_repository(store).try_start_build(id).await
     }
 
     /// Marks one template build as failed.
@@ -279,7 +416,20 @@ impl SnapshotManager {
         id: &SnapshotId,
         reason: crate::snapshot::TemplateBuildErrorReason,
     ) -> crate::snapshot::RepositoryResult<()> {
-        self.repository.mark_build_error(id, reason).await
+        self.mark_build_error_from(SnapshotStore::Default, id, reason)
+            .await
+    }
+
+    /// Marks a template build as failed on a selected store.
+    pub async fn mark_build_error_from(
+        &self,
+        store: SnapshotStore,
+        id: &SnapshotId,
+        reason: crate::snapshot::TemplateBuildErrorReason,
+    ) -> crate::snapshot::RepositoryResult<()> {
+        self.resolve_repository(store)
+            .mark_build_error(id, reason)
+            .await
     }
 }
 

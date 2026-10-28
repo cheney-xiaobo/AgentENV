@@ -340,12 +340,23 @@ pub struct SnapshotConfig {
     pub p2p_enabled: bool,
     #[config(nested)]
     pub image_publish: SnapshotImagePublishConfig,
+    #[config(nested)]
+    pub shared_fs: SnapshotSharedFsConfig,
 }
 
 #[derive(Debug, Config, Clone)]
 pub struct SnapshotImagePublishConfig {
     #[config(default = false)]
     pub enabled: bool,
+}
+
+/// Node-shared filesystem layer store for snapshots.
+#[derive(Debug, Config, Clone)]
+pub struct SnapshotSharedFsConfig {
+    #[config(default = false)]
+    pub enabled: bool,
+    #[config(default = "", env = "AENV_SNAPSHOT_SHARED_FS_ROOT", parse_env = parse_required_path)]
+    pub root: PathBuf,
 }
 
 /// Bucket addressing style for the S3-compatible snapshot backend.
@@ -889,6 +900,18 @@ impl AppConfig {
                 resolve_path(&self.home_path, config_dir, &posix_fs.snapshot_store);
         }
 
+        if self.snapshot.shared_fs.enabled {
+            let raw_root = self.snapshot.shared_fs.root.clone();
+            if raw_root.as_os_str().is_empty() {
+                bail!("[snapshot.shared_fs] enabled requires [snapshot.shared_fs] root to be set");
+            }
+            let resolved = resolve_path(&self.home_path, config_dir, &raw_root);
+            if !resolved.is_absolute() {
+                bail!("snapshot.shared_fs.root must be an absolute path");
+            }
+            self.snapshot.shared_fs.root = resolved;
+        }
+
         self.p2p.store_dir = resolve_path(&self.home_path, config_dir, &self.p2p.store_dir);
 
         // Dirty-page tracking is a KVM-only default. Disable it before
@@ -930,6 +953,23 @@ impl AppConfig {
         self.validate_memory_snapshot_background_download()?;
         self.validate_overlaybd_global_config_paths()?;
         self.validate_disk_rate_limit()?;
+        self.validate_snapshot_shared_fs()?;
+        Ok(())
+    }
+
+    fn validate_snapshot_shared_fs(&self) -> Result<()> {
+        if self.snapshot.shared_fs.enabled {
+            if self.snapshot.repository_backend != SnapshotRepositoryBackendKind::Oss {
+                bail!("[snapshot.shared_fs] enabled requires snapshot.repository_backend=oss");
+            }
+            let root = &self.snapshot.shared_fs.root;
+            if !root.is_dir() {
+                bail!(
+                    "snapshot.shared_fs.root '{}' does not exist; mount the shared filesystem on every node at the same path before starting",
+                    root.display()
+                );
+            }
+        }
         Ok(())
     }
 

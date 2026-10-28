@@ -15,11 +15,11 @@ use crate::image::cache::{
     local_image_services_from_global_config, RuntimeImageOwner, RuntimeImageRefs,
 };
 use crate::sandbox::{
-    CapturedSandboxSnapshot, CustomExtensionClient, CustomExtensionParams,
-    EnvdAccessToken, FirecrackerSandboxFactory, FreshSandboxBuildSpec, PausedSandboxState,
-    RuntimeArtifactSet, SandboxAccessTokenGenerator, SandboxBackend, SandboxBackendFactory,
-    SandboxCaptureError, SandboxCaptureResult, SandboxForkSpec, SandboxLaunchConfig,
-    SandboxNetworkPolicy, SandboxRuntimeInfo,
+    CapturedSandboxSnapshot, CustomExtensionClient, CustomExtensionParams, EnvdAccessToken,
+    FirecrackerSandboxFactory, FreshSandboxBuildSpec, PausedSandboxState, RuntimeArtifactSet,
+    SandboxAccessTokenGenerator, SandboxBackend, SandboxBackendFactory, SandboxCaptureError,
+    SandboxCaptureResult, SandboxForkSpec, SandboxLaunchConfig, SandboxNetworkPolicy,
+    SandboxRuntimeInfo,
 };
 use crate::snapshot::SnapshotRuntimeVersions;
 use crate::types::{bytes_to_mib_ceil, SandboxId, SandboxResources};
@@ -1596,11 +1596,7 @@ where
 
         // Restore the sandbox state to its original state (Running or Paused).
         self.store
-            .update_state_if_state(
-                &sandbox_id,
-                original_state,
-                &[SandboxState::Snapshotting],
-            )
+            .update_state_if_state(&sandbox_id, original_state, &[SandboxState::Snapshotting])
             .await?;
         let metadata = match self.store.get(&sandbox_id).await? {
             Some(metadata) => metadata,
@@ -2294,8 +2290,12 @@ where
                     warn!(error = ?err, "failed to allocate paused sandbox artifact root");
                     self.release_image_refs(RuntimeImageOwner::PausedSandbox(sandbox_id))
                         .await;
-                    self.cleanup_failed_launch(&plan, handle, FailedLaunchStage::TransitionalPersisted)
-                        .await;
+                    self.cleanup_failed_launch(
+                        &plan,
+                        handle,
+                        FailedLaunchStage::TransitionalPersisted,
+                    )
+                    .await;
                     return Err(OrchestratorError::from(err));
                 }
             };
@@ -2312,8 +2312,12 @@ where
                     warn!(error = ?err, "failed to pause sandbox after launch for start_paused");
                     self.release_image_refs(RuntimeImageOwner::PausedSandbox(sandbox_id))
                         .await;
-                    self.cleanup_failed_launch(&plan, handle, FailedLaunchStage::TransitionalPersisted)
-                        .await;
+                    self.cleanup_failed_launch(
+                        &plan,
+                        handle,
+                        FailedLaunchStage::TransitionalPersisted,
+                    )
+                    .await;
                     return Err(OrchestratorError::SandboxOperationFailed {
                         sandbox_id,
                         operation: SandboxOperation::Pause,
@@ -2413,8 +2417,12 @@ where
                     Err(err) => {
                         warn!(error = %format_args!("{err:#}"), "sandbox became ready without a proxy target; rolling back launch");
                         drop(sandbox);
-                        self.cleanup_failed_launch(&plan, handle, FailedLaunchStage::RunningPersisted)
-                            .await;
+                        self.cleanup_failed_launch(
+                            &plan,
+                            handle,
+                            FailedLaunchStage::RunningPersisted,
+                        )
+                        .await;
                         return Err(err);
                     }
                 }

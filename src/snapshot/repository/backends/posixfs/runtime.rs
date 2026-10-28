@@ -302,12 +302,7 @@ impl PosixFsRuntimeResolver {
             .memory_image_config_path(snapshot_id);
         let label = format!("memory for snapshot '{snapshot_id}'");
         let cache_key = runtime_image_cache_key(snapshot_id, "memory/image.json");
-        let layers = snapshot
-            .memory_layers
-            .iter()
-            .cloned()
-            .map(OverlaybdLayerRef::Managed)
-            .collect::<Vec<_>>();
+        let layers = snapshot.memory_layers.clone();
         self.materialize_and_pin(
             &layers,
             &destination,

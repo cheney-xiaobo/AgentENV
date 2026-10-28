@@ -2942,6 +2942,9 @@ pub struct NewSandbox {
     #[serde(default = "default_optional_nullable")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp: Option<Nullable<std::collections::HashMap<String, crate::types::Object>>>,
+    #[serde(rename = "snapshotStore")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_store: Option<String>,
 }
 
 impl NewSandbox {
@@ -2961,6 +2964,7 @@ impl NewSandbox {
             env_vars: None,
             custom_extension_params: None,
             mcp: None,
+            snapshot_store: None,
         }
     }
 }
@@ -3038,6 +3042,7 @@ impl std::str::FromStr for NewSandbox {
                 Vec<std::collections::HashMap<String, crate::types::Object>>,
             pub mcp: Vec<std::collections::HashMap<String, crate::types::Object>>,
             pub start_paused: Vec<bool>,
+            pub snapshot_store: Vec<String>,
         }
 
         let mut intermediate_rep = IntermediateRep::default();
@@ -3115,6 +3120,10 @@ impl std::str::FromStr for NewSandbox {
                                 .to_string(),
                         );
                     }
+                    "snapshotStore" => intermediate_rep.snapshot_store.push(
+                        String::from_str(val)
+                            .map_err(|x| format!("Error parsing field snapshotStore: {x}"))?,
+                    ),
                     "mcp" => {
                         return std::result::Result::Err(
                             "Parsing a container in this style is not supported in NewSandbox"
@@ -3154,6 +3163,7 @@ impl std::str::FromStr for NewSandbox {
                 "Nullable types not supported in NewSandbox".to_string(),
             )?,
             start_paused: intermediate_rep.start_paused.into_iter().next(),
+            snapshot_store: intermediate_rep.snapshot_store.into_iter().next(),
         })
     }
 }
@@ -6327,12 +6337,19 @@ pub struct SandboxSnapshotRequest {
     #[validate(custom(function = "check_xss_string"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Selects which snapshot store the captured snapshot is published to.
+    #[serde(rename = "snapshotStore")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_store: Option<String>,
 }
 
 impl SandboxSnapshotRequest {
     #[allow(clippy::new_without_default, clippy::too_many_arguments)]
     pub fn new() -> SandboxSnapshotRequest {
-        SandboxSnapshotRequest { name: None }
+        SandboxSnapshotRequest {
+            name: None,
+            snapshot_store: None,
+        }
     }
 }
 
@@ -6367,6 +6384,7 @@ impl std::str::FromStr for SandboxSnapshotRequest {
         #[allow(dead_code)]
         struct IntermediateRep {
             pub name: Vec<String>,
+            pub snapshot_store: Vec<String>,
         }
 
         let mut intermediate_rep = IntermediateRep::default();
@@ -6389,6 +6407,9 @@ impl std::str::FromStr for SandboxSnapshotRequest {
                 #[allow(clippy::match_single_binding)]
                 match key {
                     #[allow(clippy::redundant_clone)]
+                    "snapshotStore" => intermediate_rep.snapshot_store.push(
+                        <String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?,
+                    ),
                     "name" => intermediate_rep.name.push(
                         <String as std::str::FromStr>::from_str(val).map_err(|x| x.to_string())?,
                     ),
@@ -6407,6 +6428,7 @@ impl std::str::FromStr for SandboxSnapshotRequest {
         // Use the intermediate representation to return the struct
         std::result::Result::Ok(SandboxSnapshotRequest {
             name: intermediate_rep.name.into_iter().next(),
+            snapshot_store: intermediate_rep.snapshot_store.into_iter().next(),
         })
     }
 }

@@ -291,7 +291,10 @@ impl SnapshotRepository for OssSnapshotRepository {
                 custom_extension_params: metadata.custom_extension_params.clone(),
                 rootfs_layers,
                 attached_drives,
-                memory_layers,
+                memory_layers: memory_layers
+                    .into_iter()
+                    .map(OverlaybdLayerRef::Managed)
+                    .collect(),
                 disk_publications: disk_publications.clone(),
             };
 
@@ -912,7 +915,9 @@ impl OssSnapshotRepository {
             }
         }
         for layer in &committed.memory_layers {
-            digests.insert(layer.digest.clone());
+            if let OverlaybdLayerRef::Managed(managed) = layer {
+                digests.insert(managed.digest.clone());
+            }
         }
         for drive in &committed.attached_drives {
             let CommittedAttachedDrive::Overlaybd { layers, .. } = drive;
@@ -1262,6 +1267,49 @@ impl OssSnapshotRepository {
     }
 }
 
+#[async_trait]
+impl crate::snapshot::repository::backends::sharedfs::LayerStorage for OssSnapshotRepository {
+    async fn import_disk_base_layer(
+        &self,
+        source: &Path,
+        digest: &str,
+        size: u64,
+    ) -> RepositoryResult<ManagedLayer> {
+        self.import_managed_layer_with_descriptor(
+            source,
+            digest,
+            size,
+            OssUploadArtifact::RootfsLayer,
+        )
+        .await
+    }
+
+    async fn import_memory_base_layer(
+        &self,
+        source: &Path,
+        digest: &str,
+        size: u64,
+    ) -> RepositoryResult<ManagedLayer> {
+        self.import_managed_layer_with_descriptor(
+            source,
+            digest,
+            size,
+            OssUploadArtifact::MemoryLayer,
+        )
+        .await
+    }
+
+    fn managed_base_layer_config(&self, layer: &ManagedLayer) -> LayerConfig {
+        LayerConfig {
+            repo_blob_url: self.client.managed_layers_repo_blob_url(),
+            digest: layer.digest.clone(),
+            size: layer.size,
+            uuid: layer.uuid.clone().unwrap_or_default(),
+            ..Default::default()
+        }
+    }
+}
+
 /// Upload a content-addressed managed layer if it is not already present.
 ///
 /// Managed layers are keyed by `sha256:{digest}`, so concurrent writers
@@ -1528,14 +1576,15 @@ mod tests {
             size,
             uuid: None,
         };
-        let external = |digest: &str, size: u64| OverlaybdLayerRef::External(ExternalLayer {
-            digest: digest.to_string(),
-            repo_blob_url: "https://registry.example/v2/ns/image/blobs".to_string(),
-            size,
-        });
-        let managed_ref = |digest: &str, size: u64| {
-            OverlaybdLayerRef::Managed(managed(digest, size))
+        let external = |digest: &str, size: u64| {
+            OverlaybdLayerRef::External(ExternalLayer {
+                digest: digest.to_string(),
+                repo_blob_url: "https://registry.example/v2/ns/image/blobs".to_string(),
+                size,
+            })
         };
+        let managed_ref =
+            |digest: &str, size: u64| OverlaybdLayerRef::Managed(managed(digest, size));
 
         let committed = CommittedSnapshot {
             rootfs_layers: vec![

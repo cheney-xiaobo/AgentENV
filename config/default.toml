@@ -113,7 +113,7 @@ low_watermark_ratio = 0.70
 # production unless the deployment accepts that operational risk.
 [p2p]
 # Master switch for peer-to-peer artifact transport.
-enabled = false
+enabled = true
 # Transport implementation: "iroh" or "disabled".
 transport = "iroh"
 # Local content store for the transport.
@@ -210,7 +210,11 @@ auto_resume_min_sandbox_timeout_secs = 300
 # Durable repository backend:
 # - "posix_fs" stores snapshots on a local or shared filesystem.
 # - "oss" stores snapshots in S3-compatible object storage.
-repository_backend = "posix_fs"
+repository_backend = "oss"
+
+[snapshot.shared_fs]
+enabled = true
+root = "/mnt/aenv-snapshots"
 
 # EXPERIMENTAL: publish snapshot artifacts to P2P and use P2P during OSS
 # resolution. Effective only when [p2p].enabled is also true. POSIX fixed
@@ -223,8 +227,8 @@ p2p_enabled = true
 # VM state remain in the snapshot repository. Requires an OverlayBD-capable
 # source registry and Docker push credentials. Locally converted images fall
 # back to object storage; incompatible remote layouts fail publication.
-# [snapshot.image_publish]
-# enabled = true
+[snapshot.image_publish]
+enabled = true
 
 # POSIX storage defaults under AENV_HOME. Set this for a shared or independent
 # snapshot filesystem.
@@ -233,17 +237,17 @@ p2p_enabled = true
 
 # OSS requires an endpoint, bucket, region, and either credential_process or
 # static credentials. credential_process takes precedence over static values.
-# [backend.oss]
-# endpoint = "https://oss-cn-beijing-internal.aliyuncs.com"
-# bucket = "agentenv-snapshots"
-# region = "cn-beijing"
+[backend.oss]
+endpoint = "http://90.91.185.82:9000"
+bucket = "agentenv-snapshots"
+region = "cn-beijing"
 # Bucket addressing style: "virtual" or "path". Leave unset to use
 # endpoint-based auto-detection.
-# addressing_style = "virtual" # or "path"
+addressing_style = "path"
 # prefix = "snapshots/"
 # credential_process = "/usr/local/bin/get-oss-credentials"
-# access_key_id = "..."
-# access_key_secret = "..."
+access_key_id = "agentenv"
+access_key_secret = "nashzhou12#$"
 # security_token = "..."
 # cache_max_size_gb = 10              # 10 GiB node-local artifact cache
 
@@ -281,8 +285,8 @@ p2p_fetch_range_timeout_ms = 2000
 [pool]
 # Shared idle-resource targets. Pools start low and grow their refill target
 # toward the high watermark as acquisitions drain them. Low must not exceed high.
-low_watermark = 2
-high_watermark = 64
+low_watermark = 20
+high_watermark = 128
 
 [pool.network]
 # Refill the network-slot pool in the background.
@@ -314,7 +318,7 @@ track_dirty_pages = true
 
 # Compress memory snapshot layers. The algorithm is parsed but ignored when
 # compression is disabled.
-compression_enabled = false
+compression_enabled = true
 # Supported algorithms are "lz4" and "zstd".
 compression_algorithm = "lz4"
 # Workers compressing 4 KiB blocks. One is sequential; higher values run in

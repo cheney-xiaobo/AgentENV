@@ -39,6 +39,20 @@ pub enum SnapshotsSnapshotIdGetResponse {
     Status500_ServerError(models::Error),
 }
 
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[must_use]
+#[allow(clippy::large_enum_variant)]
+pub enum SnapshotsSnapshotIdDeleteResponse {
+    /// The snapshot was deleted successfully
+    Status204_TheSnapshotWasDeletedSuccessfully,
+    /// Authentication error
+    Status401_AuthenticationError(models::Error),
+    /// Not found
+    Status404_NotFound(models::Error),
+    /// Server error
+    Status500_ServerError(models::Error),
+}
+
 /// Snapshots
 #[async_trait]
 #[allow(clippy::ptr_arg)]
@@ -70,4 +84,17 @@ pub trait Snapshots<E: std::fmt::Debug + Send + Sync + 'static = ()>:
         claims: &Self::Claims,
         path_params: &models::SnapshotsSnapshotIdGetPathParams,
     ) -> Result<SnapshotsSnapshotIdGetResponse, E>;
+
+    /// Delete a snapshot by ID or alias.
+    ///
+    /// SnapshotsSnapshotIdDelete - DELETE /snapshots/{snapshotID}
+    async fn snapshots_snapshot_id_delete(
+        &self,
+        method: &Method,
+        host: &Host,
+        cookies: &CookieJar,
+        claims: &Self::Claims,
+        path_params: &models::SnapshotsSnapshotIdGetPathParams,
+        snapshot_store: Option<String>,
+    ) -> Result<SnapshotsSnapshotIdDeleteResponse, E>;
 }

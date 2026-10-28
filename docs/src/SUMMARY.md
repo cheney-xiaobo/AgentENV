@@ -60,3 +60,4 @@
 - [Proxy Design](./internals/proxy-design.md)
 - [Distributed Control Plane](./internals/services.md)
 - [P2P Artifact Transport](./internals/p2p-design.md)
+- [Shared Filesystem Layer Store](./internals/shared-fs-layer-store.md)

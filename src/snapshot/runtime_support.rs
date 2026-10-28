@@ -188,6 +188,18 @@ where
                     remote_repo_blob_url,
                 });
             }
+            OverlaybdLayerRef::SharedFS(layer) => {
+                materialized.push(MaterializedLower {
+                    config: LayerConfig {
+                        file: layer.path.clone(),
+                        digest: layer.digest.clone(),
+                        size: layer.size,
+                        uuid: layer.uuid.clone().unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    remote_repo_blob_url: None,
+                });
+            }
             OverlaybdLayerRef::External(layer) => {
                 let mut lower = LayerConfig {
                     digest: layer.digest.clone(),

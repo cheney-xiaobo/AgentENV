@@ -691,6 +691,14 @@ components:
         name:
           type: string
           description: Optional name for the snapshot template. If a snapshot template with this name already exists, a new build will be assigned to the existing template instead of creating a new one.
+        snapshotStore:
+          type: string
+          enum: [default, shared_fs]
+          default: default
+          description: >
+            Publishes the captured snapshot to the shared-filesystem store when
+            `shared_fs` (requires [snapshot.shared_fs].enabled); base layers
+            keep their original sources.
 
     SandboxForkRequest:
       type: object
@@ -1952,6 +1960,33 @@ paths:
           $ref: "#/components/responses/500"
 
   /snapshots/{snapshotID}:
+    delete:
+      description: Delete a snapshot by its ID or alias
+      tags: [snapshots]
+      security:
+        - ApiKeyAuth: []
+        - AccessTokenAuth: []
+        - AuthProviderBearerAuth: []
+          AuthProviderTeamAuth: []
+        - AdminApiKeyAuth: []
+          AdminTeamAuth: []
+      parameters:
+        - $ref: "#/components/parameters/snapshotID"
+        - name: snapshotStore
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Snapshot store to delete from (default or shared_fs)
+      responses:
+        "204":
+          description: The snapshot was deleted successfully
+        "401":
+          $ref: "#/components/responses/401"
+        "404":
+          $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
     get:
       description: Get information about a single snapshot by its ID or alias
       tags: [snapshots]

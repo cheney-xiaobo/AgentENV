@@ -154,6 +154,43 @@ impl Snapshots<()> for ApiImpl {
             )),
         }
     }
+
+    async fn snapshots_snapshot_id_delete(
+        &self,
+        _method: &Method,
+        _host: &Host,
+        _cookies: &CookieJar,
+        _claims: &Self::Claims,
+        path_params: &models::SnapshotsSnapshotIdGetPathParams,
+        snapshot_store: Option<String>,
+    ) -> Result<SnapshotsSnapshotIdDeleteResponse, ()> {
+        use crate::snapshot::SnapshotStore;
+        let store = match snapshot_store.as_deref() {
+            None | Some("default") => SnapshotStore::Default,
+            Some("shared_fs") => {
+                if !self.snapshot_manager.shared_fs_enabled() {
+                    return Ok(SnapshotsSnapshotIdDeleteResponse::Status500_ServerError(
+                        Self::error(
+                            400,
+                            "snapshotStore 'shared_fs' is not enabled on this server".to_string(),
+                        ),
+                    ));
+                }
+                SnapshotStore::SharedFs
+            }
+            Some(other) => {
+                return Ok(SnapshotsSnapshotIdDeleteResponse::Status500_ServerError(
+                    Self::error(400, format!("unknown snapshotStore '{}'", other)),
+                ));
+            }
+        };
+        match self.snapshot_manager.delete_from(store, &path_params.snapshot_id).await {
+            Ok(_) => Ok(SnapshotsSnapshotIdDeleteResponse::Status204_TheSnapshotWasDeletedSuccessfully),
+            Err(err) => Ok(SnapshotsSnapshotIdDeleteResponse::Status500_ServerError(
+                Self::snapshot_manager_error(&err),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
